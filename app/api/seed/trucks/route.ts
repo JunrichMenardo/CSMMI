@@ -101,7 +101,7 @@ export async function POST(request: Request) {
         .select('id');
 
       if (allTrucks && allTrucks.length > 0) {
-        const ids = allTrucks.map(t => t.id);
+        const ids = allTrucks.map((t: any) => t.id);
         for (const id of ids) {
           await supabase.from('trucks').delete().eq('id', id);
         }
