@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { MapContainer, TileLayer, Marker, Polyline, useMapEvents } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Polyline, useMapEvents, Popup } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { getNearestCity } from '@/lib/cities';
@@ -118,18 +118,18 @@ export const DestinationMapInner: React.FC<DestinationMapInnerProps> = ({
       {/* Truck location marker */}
       {truckLat !== undefined && truckLng !== undefined && (
         <Marker position={[truckLat, truckLng]} icon={getTruckIcon()}>
-          <L.Popup>
+          <Popup>
             <div style={{ color: '#000', fontWeight: '500' }}>Truck Current Location</div>
-          </L.Popup>
+          </Popup>
         </Marker>
       )}
 
       {/* Selected destination marker */}
       {selectedLocation && (
         <Marker position={[selectedLocation.lat, selectedLocation.lng]} icon={defaultIcon}>
-          <L.Popup>
+          <Popup>
             <div style={{ color: '#000', fontWeight: '500' }}>Selected Destination</div>
-          </L.Popup>
+          </Popup>
         </Marker>
       )}
 
