@@ -1,9 +1,13 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-const supabase = createClient(supabaseUrl, supabaseKey);
+let supabase: any = null;
+
+if (supabaseUrl && supabaseKey) {
+  supabase = createClient(supabaseUrl, supabaseKey);
+}
 
 const sampleContainers = [
   {
@@ -66,6 +70,13 @@ const sampleContainers = [
 
 export async function POST(request: Request) {
   try {
+    if (!supabase) {
+      return Response.json(
+        { error: 'Supabase is not configured' },
+        { status: 503 }
+      );
+    }
+
     // Check for authorization header with a simple key
     const authHeader = request.headers.get('authorization');
     if (authHeader !== `Bearer ${process.env.SEED_API_KEY || 'seed-key-123'}`) {
