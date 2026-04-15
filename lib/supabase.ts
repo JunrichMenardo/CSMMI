@@ -1,15 +1,26 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-key';
 
-if (!supabaseUrl || !supabaseKey) {
-  console.warn(
-    'Supabase URL or ANON KEY is missing. Please check your .env.local file.'
-  );
+if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+  console.warn('Supabase environment variables not set, using placeholder.');
+  console.log('URL:', process.env.NEXT_PUBLIC_SUPABASE_URL);
+  console.log('KEY:', process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
 }
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+// Create Supabase client with error handling
+let supabase: SupabaseClient;
+try {
+  console.log('Creating Supabase client with URL:', supabaseUrl);
+  supabase = createClient(supabaseUrl, supabaseKey);
+} catch (error) {
+  console.error('Failed to create Supabase client:', error);
+  // Create with placeholder if it fails
+  supabase = createClient('https://placeholder.supabase.co', 'placeholder-key');
+}
+
+export { supabase };
 
 // Real-time subscription helpers (using Supabase channels)
 export const subscribeToTrucks = (callback: (trucks: any[]) => void) => {
