@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Database Admin</title>
+   <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .card {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #333;
+            margin-top: 0;
+        }
+        button {
+            padding: 12px 24px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+        .btn-reset {
+            background: #ef4444;
+            color: white;
+        }
+        .btn-reset:hover {
+            background: #dc2626;
+        }
+        .btn-clear {
+            background: #f97316;
+            color: white;
+        }
+        .btn-clear:hover {
+            background: #ea580c;
+        }
+        .btn-add {
+            background: #3b82f6;
+            color: white;
+        }
+        .btn-add:hover {
+            background: #2563eb;
+        }
+        #result {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f0f9ff;
+            border-left: 4px solid #3b82f6;
+            border-radius: 4px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            display: none;
+        }
+        .loading {
+            color: #666;
+            font-style: italic;
+        }
+        .error {
+            background: #fee2e2;
+            border-left-color: #ef4444;
+            color: #991b1b;
+        }
+        .success {
+            background: #dcfce7;
+            border-left-color: #22c55e;
+            color: #166534;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>🗄️ Database Admin Panel</h1>
+        <p>Click the buttons below to manage your trucks database:</p>
+        
+        <button class="btn-reset" onclick="resetDatabase()">🔄 Reset Database (Delete All + Add 5 Sample Trucks)</button>
+        <button class="btn-clear" onclick="clearDatabase()">🗑️ Clear All Trucks</button>
+        <button class="btn-add" onclick="addSampleTrucks()">➕ Add Sample Trucks Only</button>
+        
+        <div id="result"></div>
+    </div>
+
+    <script>
+        const API_KEY = 'seed-key-123';
+
+        async function callAPI(action) {
+            const resultDiv = document.getElementById('result');
+            resultDiv.textContent = 'Processing...';
+            resultDiv.className = 'loading';
+            resultDiv.style.display = 'block';
+
+            try {
+                const response = await fetch(`/api/seed/trucks?action=${action}`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${API_KEY}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    resultDiv.textContent = JSON.stringify(data, null, 2);
+                    resultDiv.className = 'success';
+                } else {
+                    resultDiv.textContent = `Error: ${data.error}`;
+                    resultDiv.className = 'error';
+                }
+            } catch (error) {
+                resultDiv.textContent = `Network Error: ${error.message}`;
+                resultDiv.className = 'error';
+            }
+        }
+
+        function resetDatabase() {
+            if (confirm('⚠️ This will DELETE ALL trucks and add 5 fresh sample trucks with correct coordinates. Continue?')) {
+                callAPI('reset');
+            }
+        }
+
+        function clearDatabase() {
+            if (confirm('⚠️ This will DELETE ALL trucks. Continue?')) {
+                callAPI('clear');
+            }
+        }
+
+        function addSampleTrucks() {
+            if (confirm('This will ADD 5 sample trucks to the database. Continue?')) {
+                callAPI('add');
+            }
+        }
+    </script>
+</body>
+</html>
