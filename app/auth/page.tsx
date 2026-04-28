@@ -9,7 +9,6 @@ export default function AuthPage() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isSignUp, setIsSignUp] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -29,24 +28,12 @@ export default function AuthPage() {
     setError(null);
 
     try {
-      if (isSignUp) {
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-        });
-        if (error) throw error;
-        setEmail('');
-        setPassword('');
-        setError('Check your email to confirm your account');
-        setTimeout(() => setIsSignUp(false), 2000);
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (error) throw error;
-        router.push('/dashboard');
-      }
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (error) throw error;
+      router.push('/dashboard');
     } catch (err: any) {
       setError(err.message || 'Authentication failed');
     } finally {
@@ -66,11 +53,9 @@ export default function AuthPage() {
       
       <div className="bg-white rounded-lg shadow-2xl p-8 w-full max-w-md relative z-10">
         <h1 className="text-3xl font-bold text-black mb-2">
-          Container Stock Monitoring
+          Ease Logistics
         </h1>
-        <p className="text-black mb-6">
-          {isSignUp ? 'Create your account' : 'Sign in to your account'}
-        </p>
+        <p className="text-black mb-6">Sign in to your account</p>
 
         {error && (
           <div className={`p-3 rounded mb-4 text-sm ${
@@ -116,21 +101,9 @@ export default function AuthPage() {
             disabled={loading}
             className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-semibold py-2 rounded-lg transition"
           >
-            {loading ? 'Processing...' : isSignUp ? 'Sign Up' : 'Sign In'}
+            {loading ? 'Processing...' : 'Sign In'}
           </button>
         </form>
-
-        <div className="mt-4 text-center">
-          <button
-            type="button"
-            onClick={() => setIsSignUp(!isSignUp)}
-            className="text-blue-600 hover:text-blue-700 text-sm font-medium"
-          >
-            {isSignUp
-              ? 'Already have an account? Sign In'
-              : "Don't have an account? Sign Up"}
-          </button>
-        </div>
       </div>
     </div>
   );

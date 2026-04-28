@@ -1,39 +1,32 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
-import { LogOut, BarChart3 } from 'lucide-react';
+import { BarChart3 } from 'lucide-react';
 
 interface HeaderProps {
   title?: string;
 }
 
 export const Header: React.FC<HeaderProps> = ({
-  title = 'Container Stock Monitoring',
+  title = 'Ease Logistics',
 }) => {
-  const router = useRouter();
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.push('/auth');
+  const toggleSidebar = () => {
+    window.dispatchEvent(new CustomEvent('dashboard:toggle-sidebar'));
   };
 
   return (
-    <header className="bg-gradient-to-r from-blue-600 to-indigo-900 text-white shadow-lg">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <BarChart3 className="w-8 h-8" />
-            <h1 className="text-2xl font-bold">{title}</h1>
-          </div>
-
+    <header className="bg-gradient-to-r from-blue-600 to-indigo-900 text-white shadow-lg sticky top-0 z-30">
+      <div className="px-4 sm:px-6 lg:px-8 py-3 sm:py-4">
+        <div className="flex items-center gap-3">
           <button
-            onClick={handleLogout}
-            className="flex items-center gap-2 px-4 py-2 bg-white/20 hover:bg-white/30 rounded-lg transition"
+            type="button"
+            onClick={toggleSidebar}
+            className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-white/10 hover:bg-white/20 transition shadow-sm"
+            aria-label="Open navigation menu"
           >
-            <LogOut className="w-4 h-4" />
-            <span className="text-sm font-medium">Logout</span>
+            <span className="text-2xl leading-none font-bold" aria-hidden="true">☰</span>
           </button>
+          <BarChart3 className="hidden sm:block w-7 h-7 sm:w-8 sm:h-8" />
+          <h1 className="text-lg sm:text-2xl font-bold truncate">{title}</h1>
         </div>
       </div>
     </header>

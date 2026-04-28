@@ -9,12 +9,12 @@ import { Sidebar } from '@/components/Sidebar';
 import { DashboardStats } from '@/components/DashboardStats';
 import { TruckList } from '@/components/TruckList';
 import { TruckDetails } from '@/components/TruckDetails';
-import { AddTruckForm } from '@/components/AddTruckForm';
 import dynamic from 'next/dynamic';
 import {
   fetchTrucks,
   fetchContainers,
   fetchStocks,
+  fetchStocksByContainer,
   fetchTruckRoutes,
   addTruckRoute,
 } from '@/lib/api';
@@ -30,10 +30,12 @@ export default function DashboardPage() {
   const router = useRouter();
   const [trucks, setTrucks] = useState<Truck[]>([]);
   const [containers, setContainers] = useState<Container[]>([]);
+  const [containerStocks, setContainerStocks] = useState<Map<string, Stock[]>>(new Map());
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [selectedTruckId, setSelectedTruckId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [mapMarkers, setMapMarkers] = useState<Array<{ id: string; lat: number; lng: number; name: string; type: 'port' | 'store' | 'plant' }>>([]);
 
   // Check authentication
   useEffect(() => {
@@ -63,6 +65,19 @@ export default function DashboardPage() {
         setTrucks(trucksData);
         setContainers(containersData);
         setStocks(stocksData);
+
+        // Load stocks for all containers
+        const stocksMap = new Map<string, Stock[]>();
+        for (const container of containersData) {
+          try {
+            const containerStocksData = await fetchStocksByContainer(container.id);
+            stocksMap.set(container.id, containerStocksData);
+          } catch (err) {
+            console.error(`Failed to load stocks for container ${container.id}:`, err);
+            stocksMap.set(container.id, []);
+          }
+        }
+        setContainerStocks(stocksMap);
 
         // Automatically select the first truck
         if (trucksData.length > 0) {
@@ -162,6 +177,59 @@ export default function DashboardPage() {
     };
   }, [selectedTruckId, isAuthenticated]);
 
+  // Subscribe to containers and stocks updates to keep stats current
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const containersChannel = supabase.channel('containers-updates')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'containers' },
+        (payload: any) => {
+          if (payload.eventType === 'INSERT') {
+            setContainers((prev) => [...prev, payload.new]);
+            setContainerStocks((prev) => new Map(prev).set(payload.new.id, []));
+          } else if (payload.eventType === 'UPDATE') {
+            setContainers((prev) =>
+              prev.map((c) => (c.id === payload.new.id ? payload.new : c))
+            );
+          } else if (payload.eventType === 'DELETE') {
+            setContainers((prev) => prev.filter((c) => c.id !== payload.old.id));
+            setContainerStocks((prev) => {
+              const newMap = new Map(prev);
+              newMap.delete(payload.old.id);
+              return newMap;
+            });
+          }
+        }
+      )
+      .subscribe();
+
+    const stocksChannel = supabase.channel('stocks-updates')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'stocks' },
+        async (payload: any) => {
+          // Reload stocks for the affected container
+          if (payload.new?.container_id || payload.old?.container_id) {
+            const containerId = payload.new?.container_id || payload.old?.container_id;
+            try {
+              const updatedStocks = await fetchStocksByContainer(containerId);
+              setContainerStocks((prev) => new Map(prev).set(containerId, updatedStocks));
+            } catch (err) {
+              console.error(`Failed to reload stocks for container ${containerId}:`, err);
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      containersChannel.unsubscribe();
+      stocksChannel.unsubscribe();
+    };
+  }, [isAuthenticated]);
+
   const selectedTruck = trucks.find((t) => t.id === selectedTruckId);
   const totalStocks = stocks.reduce((sum, stock) => sum + stock.quantity, 0);
 
@@ -181,19 +249,10 @@ export default function DashboardPage() {
       <Sidebar />
       <Header />
 
-      <main className="ml-64 px-4 sm:px-6 lg:px-8 py-8">
-        {/* Header with Add Truck Button */}
-        <div className="flex items-center justify-between mb-8">
+      <main className="dashboard-main px-4 sm:px-6 lg:px-8 py-8 lg:ml-64">
+        {/* Header */}
+        <div className="mb-8">
           <h1 className="text-3xl font-bold text-black">Dashboard</h1>
-          <AddTruckForm
-            onTruckAdded={(newTruck) => {
-              setTrucks((prev) => [newTruck, ...prev]);
-              // Auto-select new truck if none is selected
-              if (!selectedTruckId) {
-                setSelectedTruckId(newTruck.id);
-              }
-            }}
-          />
         </div>
 
         {/* Stats */}
@@ -202,17 +261,20 @@ export default function DashboardPage() {
             trucks={trucks}
             containers={containers}
             totalStocks={totalStocks}
+            containerStocks={containerStocks}
+            stocks={stocks}
           />
         </div>
 
         {/* Main Content */}
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* Map - spans 2 columns on lg */}
-          <div className="lg:col-span-2 h-screen lg:row-span-2">
+          <div className="lg:col-span-2 h-80 lg:h-screen lg:row-span-2">
             <TruckMap
               trucks={trucks}
               selectedTruckId={selectedTruckId}
               onSelectTruck={setSelectedTruckId}
+              onMarkersChange={setMapMarkers}
             />
           </div>
 
@@ -220,6 +282,8 @@ export default function DashboardPage() {
           <div className="lg:col-span-2 h-96 overflow-y-auto">
             <TruckList
               trucks={trucks}
+              containers={containers}
+              stocks={stocks}
               selectedTruckId={selectedTruckId}
               onSelectTruck={setSelectedTruckId}
               loading={loading}
@@ -229,7 +293,17 @@ export default function DashboardPage() {
           {/* Truck Details */}
           {selectedTruck ? (
             <div className="lg:col-span-2 h-96 overflow-y-auto">
-              <TruckDetails truck={selectedTruck} />
+              <TruckDetails 
+                truck={selectedTruck}
+                onContainerDelivered={(containerId) => {
+                  // Refresh containers and stocks to update stats
+                  setContainers((prev) =>
+                    prev.map((c) =>
+                      c.id === containerId ? { ...c, status: 'Delivered' } : c
+                    )
+                  );
+                }}
+              />
             </div>
           ) : (
             <div className="lg:col-span-2 bg-white rounded-lg shadow-lg p-6 flex items-center justify-center h-96">

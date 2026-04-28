@@ -5,6 +5,7 @@ import { MapContainer, TileLayer, Marker, Polyline, Popup, useMapEvents } from '
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { getNearestCity } from '@/lib/cities';
+import { useLocationMarkers } from '@/hooks/useLocationMarkers';
 
 // Fetch road route from OSRM API
 const fetchRoadRoute = async (
@@ -26,6 +27,39 @@ const fetchRoadRoute = async (
     console.error('Failed to fetch road route:', error);
   }
   return [];
+};
+
+// Get marker icon based on type
+const getMarkerIcon = (type: 'port' | 'store' | 'plant') => {
+  let color: string;
+  let emoji: string;
+  
+  switch (type) {
+    case 'port':
+      color = '#ef4444';
+      emoji = '⚓';
+      break;
+    case 'store':
+      color = '#f59e0b';
+      emoji = '🏪';
+      break;
+    case 'plant':
+      color = '#8b5cf6';
+      emoji = '🏭';
+      break;
+  }
+
+  return new L.DivIcon({
+    html: `
+      <div style="background: ${color}; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; border: 3px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.3);">
+        ${emoji}
+      </div>
+    `,
+    iconSize: [40, 40],
+    iconAnchor: [20, 40],
+    popupAnchor: [0, -40],
+    className: 'marker-icon'
+  });
 };
 
 // Truck SVG Icon
@@ -86,6 +120,7 @@ export default function DestinationMapContent({
 }: DestinationMapContentProps) {
   const [selectedLocation, setSelectedLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [routePath, setRoutePath] = useState<[number, number][]>([]);
+  const { markers } = useLocationMarkers();
 
   const handleMapClick = async (city: string, lat: number, lng: number) => {
     onLocationClick({ city, lat, lng });
@@ -114,6 +149,24 @@ export default function DestinationMapContent({
       />
       
       <MapClickHandler onLocationClick={handleMapClick} />
+
+      {/* Display all saved markers */}
+      {markers.map(marker => (
+        <Marker
+          key={marker.id}
+          position={[marker.lat, marker.lng]}
+          icon={getMarkerIcon(marker.type)}
+        >
+          <Popup>
+            <div style={{ color: '#000', fontWeight: '500', textAlign: 'center' }}>
+              <div>{marker.name}</div>
+              <div style={{ fontSize: '0.85rem', marginTop: '4px', color: '#666' }}>
+                {marker.lat.toFixed(4)}, {marker.lng.toFixed(4)}
+              </div>
+            </div>
+          </Popup>
+        </Marker>
+      ))}
 
       {/* Truck location marker */}
       {truckLat !== undefined && truckLng !== undefined && (

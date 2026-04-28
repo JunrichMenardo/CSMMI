@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, memo } from 'react';
+import { useEffect, useState, memo, useRef } from 'react';
 import {
   MapContainer,
   TileLayer,
@@ -14,6 +14,45 @@ import 'leaflet/dist/leaflet.css';
 import { Truck, TruckRoute } from '@/types';
 import { fetchTruckRoutes } from '@/lib/api';
 import { getCityCoordinates } from '@/lib/cities';
+import { useLocationMarkers } from '@/hooks/useLocationMarkers';
+
+// Philippines Locations Database - Accurate Coordinates
+const PHILIPPINES_LOCATIONS = [
+  // Mindanao Ports - ACCURATE COORDINATES
+  { name: 'Port of Zamboanga', lat: 6.9082, lng: 122.0788 },
+  { name: 'Port of Dipolog', lat: 8.6329, lng: 123.3385 },
+  { name: 'Port of Cagayan de Oro', lat: 8.4841, lng: 124.6332 },
+  { name: 'Port of Iligan', lat: 8.2256, lng: 124.2168 },
+  { name: 'Port of Butuan', lat: 8.9699, lng: 125.5255 },
+  { name: 'Port of Surigao', lat: 9.7644, lng: 125.5044 },
+  { name: 'Port of Davao', lat: 7.0731, lng: 125.6123 },
+  { name: 'Port of General Santos', lat: 6.1304, lng: 125.1713 },
+  { name: 'Port of Cotabato', lat: 7.2047, lng: 124.2427 },
+  { name: 'Port of Nasipit', lat: 9.1050, lng: 125.4833 },
+  
+  // Major Cities in Mindanao - ACCURATE COORDINATES
+  { name: 'Davao City', lat: 7.0731, lng: 125.6123 },
+  { name: 'Cagayan de Oro', lat: 8.4841, lng: 124.6332 },
+  { name: 'Zamboanga City', lat: 6.9082, lng: 122.0788 },
+  { name: 'Iligan City', lat: 8.2256, lng: 124.2168 },
+  { name: 'Butuan City', lat: 8.9699, lng: 125.5255 },
+  { name: 'General Santos City', lat: 6.1304, lng: 125.1713 },
+  { name: 'Cotabato City', lat: 7.2047, lng: 124.2427 },
+  { name: 'Surigao City', lat: 9.7644, lng: 125.5044 },
+  
+  // Major Cities in Luzon - ACCURATE COORDINATES
+  { name: 'Manila', lat: 14.5994, lng: 120.9842 },
+  { name: 'Port of Manila', lat: 14.5994, lng: 120.9842 },
+  { name: 'Quezon City', lat: 14.6349, lng: 121.0388 },
+  { name: 'Makati', lat: 14.5505, lng: 121.0233 },
+  { name: 'Caloocan', lat: 14.6288, lng: 120.9757 },
+  
+  // Major Cities in Visayas - ACCURATE COORDINATES
+  { name: 'Cebu City', lat: 10.3157, lng: 123.8854 },
+  { name: 'Port of Cebu', lat: 10.3157, lng: 123.8854 },
+  { name: 'Iloilo City', lat: 10.6894, lng: 122.5598 },
+  { name: 'Bacolod City', lat: 10.4017, lng: 122.9852 },
+];
 
 // Function to fetch road route from OSRM API
 const fetchRoadRoute = async (
@@ -39,7 +78,6 @@ const fetchRoadRoute = async (
   return [];
 };
 
-// Truck SVG Icon
 const getTruckIcon = (rotation: number = 0) => {
   return new L.DivIcon({
     html: `
@@ -65,6 +103,79 @@ const getTruckIcon = (rotation: number = 0) => {
   });
 };
 
+const getMarkerIcon = (type: 'port' | 'store' | 'plant') => {
+  let color: string;
+  let emoji: string;
+  
+  switch (type) {
+    case 'port':
+      color = '#ef4444';
+      emoji = '⚓';
+      break;
+    case 'store':
+      color = '#f59e0b';
+      emoji = '🏪';
+      break;
+    case 'plant':
+      color = '#8b5cf6';
+      emoji = '🏭';
+      break;
+  }
+
+  return new L.DivIcon({
+    html: `
+      <div style="background: ${color}; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; border: 3px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.3);">
+        ${emoji}
+      </div>
+    `,
+    iconSize: [40, 40],
+    iconAnchor: [20, 40],
+    popupAnchor: [0, -40],
+    className: 'marker-icon'
+  });
+};
+
+const getSearchMarkerIcon = () => {
+  return new L.DivIcon({
+    html: `
+      <div style="background: #3b82f6; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; border: 3px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.3);">
+        📍
+      </div>
+    `,
+    iconSize: [40, 40],
+    iconAnchor: [20, 40],
+    popupAnchor: [0, -40],
+    className: 'marker-icon'
+  });
+};
+
+
+// Mindanao Seaports Data
+const MINDANAO_SEAPORTS = [
+  { name: 'Port of Zamboanga', lat: 6.9083, lng: 122.0789 },
+  { name: 'Port of Dipolog', lat: 8.6329, lng: 123.3385 },
+  { name: 'Port of Dapitan', lat: 8.5670, lng: 123.6485 },
+  { name: 'Port of Ozamiz', lat: 8.1465, lng: 123.8479 },
+  { name: 'Port of Oroquieta', lat: 8.5933, lng: 123.8129 },
+  { name: 'Port of Jimenez', lat: 8.5050, lng: 123.8150 },
+  { name: 'Port of Plaridel', lat: 8.7467, lng: 123.7842 },
+  { name: 'Port of Cagayan de Oro', lat: 8.4842, lng: 124.6331 },
+  { name: 'Port of Opol', lat: 8.5833, lng: 124.5500 },
+  { name: 'Port of Iligan', lat: 8.2256, lng: 124.2168 },
+  { name: 'Port of Mukas', lat: 8.3667, lng: 124.1333 },
+  { name: 'Port of Tubod', lat: 8.3833, lng: 124.3000 },
+  { name: 'Port of Butuan', lat: 8.9699, lng: 125.5255 },
+  { name: 'Port of Nasipit', lat: 9.1050, lng: 125.4833 },
+  { name: 'Port of Bislig', lat: 8.1963, lng: 126.1375 },
+  { name: 'Port of Surigao', lat: 9.7644, lng: 125.5044 },
+  { name: 'Port of Mati', lat: 7.5929, lng: 126.2037 },
+  { name: 'Port of Davao', lat: 7.0731, lng: 125.6123 },
+  { name: 'Port of Pagadian', lat: 7.8175, lng: 123.4304 },
+  { name: 'Port of General Santos', lat: 6.1304, lng: 125.1713 },
+  { name: 'Port of Cotabato', lat: 7.2047, lng: 124.2427 },
+  { name: 'Port of Balingoan', lat: 8.7667, lng: 124.4000 },
+];
+
 // Fix for default Leaflet marker icon
 const defaultIcon = new L.Icon({
   iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
@@ -75,10 +186,23 @@ const defaultIcon = new L.Icon({
   shadowSize: [41, 41],
 });
 
+// Seaport Icon with Red Marker
+const getSeaportIcon = () => {
+  return new L.Icon({
+    iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+    iconSize: [25, 41],
+    iconAnchor: [12, 41],
+    popupAnchor: [1, -34],
+    shadowSize: [41, 41],
+  });
+};
+
 interface MapProps {
   trucks: Truck[];
   selectedTruckId: string | null;
   onSelectTruck: (truckId: string) => void;
+  onMarkersChange?: (markers: Array<{ id: string; lat: number; lng: number; name: string; type: 'port' | 'store' | 'plant' }>) => void;
 }
 
 const TruckMarkers: React.FC<{
@@ -91,7 +215,10 @@ const TruckMarkers: React.FC<{
 }> = memo(({ trucks, selectedTruckId, onSelectTruck, routes, destinations, roadRoutes }) => {
   return (
     <>
-      {trucks.map((truck) => (
+
+      {trucks.map((truck) => {
+        console.log(`🚚 TRUCK "${truck.name}" RENDERING AT:`, [truck.latitude, truck.longitude]);
+        return (
         <div key={truck.id}>
           {truck.latitude && truck.longitude && (
             <>
@@ -216,7 +343,8 @@ const TruckMarkers: React.FC<{
             </>
           )}
         </div>
-      ))}
+        );
+      })}
     </>
   );
 });
@@ -227,13 +355,26 @@ const TruckMapComponent: React.FC<MapProps> = ({
   trucks,
   selectedTruckId,
   onSelectTruck,
+  onMarkersChange,
 }) => {
+  const { markers: customMarkers } = useLocationMarkers();
   const [routes, setRoutes] = useState<{ [key: string]: TruckRoute[] }>({});
   const [destinations, setDestinations] = useState<{ [key: string]: { lat: number; lng: number; name: string } | null }>({});
   const [roadRoutes, setRoadRoutes] = useState<{ [key: string]: [number, number][] }>({});
   const [loadingRoutes, setLoadingRoutes] = useState(false);
+  const [searchMarker, setSearchMarker] = useState<{ lat: number; lng: number; name: string } | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<Array<{ name: string; lat: number; lng: number }>>([]);
+  const [showSearchResults, setShowSearchResults] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const mapRef = useRef<any>(null);
 
   const selectedTruck = trucks.find((t) => t.id === selectedTruckId);
+
+  // Notify parent when markers change
+  useEffect(() => {
+    onMarkersChange?.(customMarkers);
+  }, [customMarkers, onMarkersChange]);
 
   // Fetch routes and destination when truck is selected
   useEffect(() => {
@@ -311,19 +452,95 @@ const TruckMapComponent: React.FC<MapProps> = ({
     }
   }, [selectedTruckId, trucks]);
 
-  const defaultCenter: [number, number] = [12.8797, 121.7740]; // Philippines center
+  const defaultCenter: [number, number] = [8.5, 127.5]; // Mindanao center
+
+
+
+  const searchPlaces = async (query: string) => {
+    if (!query.trim()) {
+      setSearchResults([]);
+      return;
+    }
+
+    setSearching(true);
+    try {
+      // First, search in Philippines database
+      const lowerQuery = query.toLowerCase();
+      const localResults = PHILIPPINES_LOCATIONS.filter(loc =>
+        loc.name.toLowerCase().includes(lowerQuery)
+      );
+
+      if (localResults.length > 0) {
+        setSearchResults(localResults);
+        setShowSearchResults(true);
+        setSearching(false);
+        return;
+      }
+
+      // If no results in local database, search with Nominatim
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=10`
+      );
+      const data = await response.json();
+      
+      const results = data.map((item: any) => ({
+        name: item.display_name,
+        lat: parseFloat(item.lat),
+        lng: parseFloat(item.lon),
+      }));
+      
+      setSearchResults(results);
+      setShowSearchResults(true);
+    } catch (error) {
+      console.error('Search error:', error);
+      setSearchResults([]);
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const handleSearchSelect = (result: { name: string; lat: number; lng: number }) => {
+    console.log('🔍 SEARCH RESULT SELECTED:', result);
+    
+    // Center map on location
+    if (mapRef.current) {
+      mapRef.current.setView([result.lat, result.lng], 12);
+    }
+
+    // Show temporary marker (NOT permanent)
+    setSearchMarker({
+      lat: result.lat,
+      lng: result.lng,
+      name: result.name
+    });
+
+    // Keep search visible so user can clear it
+    setShowSearchResults(false);
+  };
+
+  const clearSearch = () => {
+    setSearchQuery('');
+    setSearchResults([]);
+    setShowSearchResults(false);
+    setSearchMarker(null); // Remove temporary marker
+  };
 
   return (
-    <div className="w-full h-full rounded-lg overflow-hidden shadow-lg">
+    <div className="w-full h-full rounded-2xl overflow-hidden shadow-2xl relative z-0 bg-gradient-to-br from-blue-50 to-cyan-50 border border-white/20">
       <MapContainer
         center={defaultCenter}
-        zoom={6}
+        zoom={7}
         style={{ height: '100%', width: '100%' }}
+        maxBounds={[[4.5, 120.0], [11.0, 131.0]]} // Mindanao bounds
+        maxBoundsViscosity={1.0}
+        ref={mapRef}
       >
         <TileLayer
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           attribution='&copy; OpenStreetMap contributors'
         />
+        
+        {/* Truck Markers and Routes */}
         <TruckMarkers
           trucks={trucks}
           selectedTruckId={selectedTruckId}
@@ -332,12 +549,51 @@ const TruckMapComponent: React.FC<MapProps> = ({
           destinations={destinations}
           roadRoutes={roadRoutes}
         />
+
+        {/* Custom Location Markers */}
+        {customMarkers.map((marker) => (
+          <Marker
+            key={marker.id}
+            position={[marker.lat, marker.lng]}
+            icon={getMarkerIcon(marker.type)}
+          >
+            <Popup>
+              <div className="p-2">
+                <p className="font-bold text-black">{marker.name}</p>
+                <p className="text-xs text-gray-600 capitalize">Type: {marker.type}</p>
+                <p className="text-xs">{marker.lat.toFixed(4)}, {marker.lng.toFixed(4)}</p>
+              </div>
+            </Popup>
+          </Marker>
+        ))}
+
+        {/* Temporary Search Result Marker */}
+        {searchMarker && (
+          <Marker
+            position={[searchMarker.lat, searchMarker.lng]}
+            icon={getSearchMarkerIcon()}
+          >
+            <Popup>
+              <div className="p-2">
+                <p className="font-bold text-black">{searchMarker.name}</p>
+                <p className="text-xs">{searchMarker.lat.toFixed(4)}, {searchMarker.lng.toFixed(4)}</p>
+                <p className="text-xs text-gray-500 mt-1">📍 Location Preview</p>
+              </div>
+            </Popup>
+          </Marker>
+        )}
       </MapContainer>
+
+      {/* Add Marker Button - Always Visible */}
+
+
       {loadingRoutes && (
         <div className="absolute top-4 left-4 bg-white p-3 rounded shadow">
           <p className="text-sm text-black">Loading route...</p>
         </div>
       )}
+
+
     </div>
   );
 };

@@ -18,7 +18,7 @@ export interface Container {
   id: string;
   container_number: string;
   truck_id: string | null;
-  status: 'Available' | 'In Transit' | 'Stored';
+  status: 'Available' | 'In Transit' | 'Stored' | 'Delivered';
   origin_location: string | null;
   destination_location: string | null;
   created_at: string;
@@ -31,8 +31,10 @@ export interface Stock {
   item_name: string;
   quantity: number;
   unit: string;
+  price_per_unit?: number | null;
+  description?: string | null;
   weight?: number;
-  expiry_date?: string;
+  expiry_date?: string | null;
   created_at: string;
   updated_at: string;
 }

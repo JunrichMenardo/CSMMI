@@ -3,26 +3,31 @@
 import { useState } from 'react';
 import { Plus, X, MapPin } from 'lucide-react';
 import { createTruck, fetchContainers } from '@/lib/api';
-import { Truck, Container } from '@/types';
+import { supabase } from '@/lib/supabase';
+import { getUserRole, createManagerRequest, getManagerId } from '@/lib/managerUtils';
+import { Truck, Container, Stock } from '@/types';
 import { getCityCoordinates } from '@/lib/cities';
 import { DestinationMapModal } from './DestinationMapModal';
 import { OriginLocationMapModal } from './OriginLocationMapModal';
 
 interface AddTruckFormProps {
   onTruckAdded: (truck: Truck) => void;
+  customMarkers?: Array<{ id: string; lat: number; lng: number; name: string; type: 'port' | 'store' | 'plant' }>;
+  trucks?: Truck[];
+  containers?: Container[];
+  stocks?: Stock[];
 }
 
-export const AddTruckForm: React.FC<AddTruckFormProps> = ({ onTruckAdded }) => {
+export const AddTruckForm: React.FC<AddTruckFormProps> = ({ onTruckAdded, customMarkers = [], trucks = [], containers: passedContainers = [], stocks = [] }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isLocationMapOpen, setIsLocationMapOpen] = useState(false);
   const [isDestinationMapOpen, setIsDestinationMapOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [containers, setContainers] = useState<Container[]>([]);
+  const [containers, setContainers] = useState<Container[]>(passedContainers);
   const [formData, setFormData] = useState({
     name: '',
     driver_name: '',
-    status: 'Idle' as const,
     capacity: '1000',
     location: '',
     destination: '',
@@ -44,6 +49,11 @@ export const AddTruckForm: React.FC<AddTruckFormProps> = ({ onTruckAdded }) => {
     }));
   };
 
+  const getLocationLabel = (value: string) => {
+    if (!value) return '';
+    return value.includes('|') ? value.split('|')[0].trim() : value.trim();
+  };
+
   // Parse location string format: "city|lat|lng"
   const parseLocationString = (locationStr: string) => {
     if (!locationStr || !locationStr.includes('|')) {
@@ -57,11 +67,37 @@ export const AddTruckForm: React.FC<AddTruckFormProps> = ({ onTruckAdded }) => {
 
   const loadContainers = async () => {
     try {
-      const data = await fetchContainers();
-      setContainers(data);
+      if (passedContainers.length > 0) {
+        setContainers(passedContainers);
+      } else {
+        const data = await fetchContainers();
+        setContainers(data);
+      }
     } catch (err) {
       console.error('Failed to load containers:', err);
     }
+  };
+
+  // Filter out containers that are already assigned to trucks
+  const getAvailableContainers = () => {
+    return containers.filter((container) => !container.truck_id || container.truck_id === null);
+  };
+
+  // Get container status
+  const getContainerStatus = (container: Container): 'Available' | 'In Transit' => {
+    if (!container.truck_id) return 'Available';
+    return 'In Transit';
+  };
+
+  // Get truck status - maps to Truck type status values
+  const getTruckStatus = (truckId: string): Truck['status'] => {
+    const truckContainers = containers.filter((c) => c.truck_id === truckId);
+    if (truckContainers.length === 0) {
+      return 'Idle';
+    }
+    const containerIds = truckContainers.map((c) => c.id);
+    const containersWithStocks = stocks.filter((s) => s.container_id && containerIds.includes(s.container_id));
+    return containersWithStocks.length > 0 ? 'Active' : 'Idle';
   };
 
   const handleOpenModal = () => {
@@ -80,7 +116,27 @@ export const AddTruckForm: React.FC<AddTruckFormProps> = ({ onTruckAdded }) => {
       return;
     }
 
+    if (formData.destination) {
+      const originLabel = getLocationLabel(formData.location);
+      const destinationLabel = getLocationLabel(formData.destination);
+      if (originLabel && destinationLabel && originLabel.toLowerCase() === destinationLabel.toLowerCase()) {
+        setError('Starting location and destination cannot be the same place. Please choose a different destination.');
+        setLoading(false);
+        return;
+      }
+    }
+
     try {
+      // Check user role
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user?.id) {
+        setError('You must be logged in');
+        setLoading(false);
+        return;
+      }
+
+      const userRole = await getUserRole(session.user.id);
+
       // Parse location string format: "city|lat|lng"
       let latitude: number, longitude: number;
       if (formData.location.includes('|')) {
@@ -104,23 +160,71 @@ export const AddTruckForm: React.FC<AddTruckFormProps> = ({ onTruckAdded }) => {
         }
       }
       
-      const truck = await createTruck({
+      // Calculate status based on assigned container
+      let status: Truck['status'] = 'Idle';
+      if (formData.container_id) {
+        const assignedContainer = containers.find((c) => c.id === formData.container_id);
+        if (assignedContainer) {
+          const containerStocks = stocks.filter((s) => s.container_id === formData.container_id);
+          status = containerStocks.length > 0 ? 'Active' : 'Idle';
+        }
+      }
+
+      const truckData = {
         name: formData.name,
         driver_name: formData.driver_name,
-        status: formData.status,
+        status,
         latitude,
         longitude,
         capacity: parseInt(formData.capacity),
         current_load: 0,
         route_id: null,
         destination_location: destinationLocation,
-      });
+      };
+
+      // Manager: Create request instead of direct action
+      if (userRole === 'manager') {
+        const managerId = await getManagerId(session.user.id);
+        if (!managerId) {
+          setError('Manager account not found');
+          setLoading(false);
+          return;
+        }
+
+        const created = await createManagerRequest(
+          managerId,
+          'add_truck',
+          'truck',
+          truckData
+        );
+
+        if (created) {
+          setError(null);
+          setFormData({
+            name: '',
+            driver_name: '',
+            capacity: '1000',
+            location: '',
+            destination: '',
+            container_id: '',
+          });
+          setIsOpen(false);
+          // Show success notification
+          alert('✅ Request submitted for admin approval!\n\nYour truck will be added after the admin reviews and approves your request.');
+          onTruckAdded({} as Truck); // Callback to refresh list
+        } else {
+          setError('Failed to submit request');
+        }
+        return;
+      }
+
+      // Admin: Create truck directly
+      const truck = await createTruck(truckData);
 
       onTruckAdded(truck);
       setFormData({
         name: '',
         driver_name: '',
-        status: 'Idle',
         capacity: '1000',
         location: '',
         destination: '',
@@ -201,21 +305,7 @@ export const AddTruckForm: React.FC<AddTruckFormProps> = ({ onTruckAdded }) => {
                 />
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-black mb-1">
-                  Status
-                </label>
-                <select
-                  name="status"
-                  value={formData.status}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-black"
-                >
-                  <option value="Active">Active</option>
-                  <option value="Idle">Idle</option>
-                  <option value="Maintenance">Maintenance</option>
-                </select>
-              </div>
+
 
               <div>
                 <label className="block text-sm font-medium text-black mb-1">
@@ -286,9 +376,9 @@ export const AddTruckForm: React.FC<AddTruckFormProps> = ({ onTruckAdded }) => {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-black"
                 >
                   <option value="">Select container (optional)</option>
-                  {containers.map((container) => (
+                  {getAvailableContainers().map((container) => (
                     <option key={container.id} value={container.id}>
-                      {container.container_number}
+                      {container.container_number} - {getContainerStatus(container)}
                     </option>
                   ))}
                 </select>
@@ -330,6 +420,7 @@ export const AddTruckForm: React.FC<AddTruckFormProps> = ({ onTruckAdded }) => {
         currentDestination={formData.destination}
         truckLat={locationData.lat}
         truckLng={locationData.lng}
+        customMarkers={customMarkers}
       />
     </>
   );

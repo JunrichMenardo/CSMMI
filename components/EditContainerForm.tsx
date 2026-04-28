@@ -1,14 +1,23 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Edit, X, Truck as TruckIcon, ShoppingCart, Trash2, Plus, MapPin } from 'lucide-react';
-import { updateContainer, fetchTrucks, fetchStocksByContainer, fetchStocks, updateStock, deleteStock } from '@/lib/api';
+import { Edit, X, Truck as TruckIcon, ShoppingCart, Trash2, Plus } from 'lucide-react';
+import { updateContainer, fetchTrucks, fetchStocksByContainer, fetchStocks, updateStock, deleteStock, deleteContainer } from '@/lib/api';
+import { supabase } from '@/lib/supabase';
+import { getUserRole, createManagerRequest, getManagerId } from '@/lib/managerUtils';
+import { deductFromInventory, addBackToInventory } from '@/lib/inventory';
 import { Container, Truck, Stock } from '@/types';
-import { OriginLocationMapModal } from './OriginLocationMapModal';
+import { Toast } from './Toast';
 
 interface EditContainerFormProps {
   container: Container;
   onContainerUpdated: (container: Container) => void;
+}
+
+interface ToastNotification {
+  id: string;
+  message: string;
+  type: 'success' | 'error' | 'info';
 }
 
 export const EditContainerForm: React.FC<EditContainerFormProps> = ({
@@ -16,9 +25,8 @@ export const EditContainerForm: React.FC<EditContainerFormProps> = ({
   onContainerUpdated,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
-  const [isOriginMapOpen, setIsOriginMapOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<ToastNotification[]>([]);
   const [trucks, setTrucks] = useState<Truck[]>([]);
   const [allStocks, setAllStocks] = useState<Stock[]>([]);
   const [containerStocks, setContainerStocks] = useState<Stock[]>([]);
@@ -26,16 +34,33 @@ export const EditContainerForm: React.FC<EditContainerFormProps> = ({
   const [newStocksToAdd, setNewStocksToAdd] = useState<Map<string, number>>(new Map());
   const [formData, setFormData] = useState({
     container_number: container.container_number,
-    status: container.status,
-    origin_location: container.origin_location || '',
     truck_id: container.truck_id || '',
   });
+  const [isEditingTruck, setIsEditingTruck] = useState(false);
+
+  // Reset form data when container changes or modal opens
+  useEffect(() => {
+    setFormData({
+      container_number: container.container_number,
+      truck_id: container.truck_id || '',
+    });
+    setIsEditingTruck(false);
+  }, [container, isOpen]);
 
   useEffect(() => {
     if (isOpen) {
       loadData();
     }
   }, [isOpen]);
+
+  const addToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    const id = Math.random().toString(36).substr(2, 9);
+    setToasts((prev) => [...prev, { id, message, type }]);
+  };
+
+  const removeToast = (id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
 
   const loadData = async () => {
     try {
@@ -46,6 +71,7 @@ export const EditContainerForm: React.FC<EditContainerFormProps> = ({
       ]);
     } catch (err) {
       console.error('Failed to load data:', err);
+      addToast('Failed to load data', 'error');
     }
   };
 
@@ -76,6 +102,21 @@ export const EditContainerForm: React.FC<EditContainerFormProps> = ({
     }
   };
 
+  const calculateContainerStatus = (truckId: string | null, hasStocks: boolean): Container['status'] => {
+    const hasAssignedTruck = !!truckId;
+
+    // If has truck assigned
+    if (hasAssignedTruck) {
+      return 'In Transit';
+    }
+    // If has stocks but no truck
+    if (hasStocks) {
+      return 'Stored';
+    }
+    // Empty container, no truck
+    return 'Available';
+  };
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setFormData((prev) => ({
@@ -98,10 +139,20 @@ export const EditContainerForm: React.FC<EditContainerFormProps> = ({
 
   const handleRemoveStock = async (stockId: string) => {
     try {
+      const stock = containerStocks.find((s) => s.id === stockId);
+      
+      // Delete the stock
       await deleteStock(stockId);
+      
+      // Add back the quantity to central inventory
+      if (stock) {
+        await addBackToInventory(stock.quantity);
+      }
+      
       setContainerStocks((prev) => prev.filter((s) => s.id !== stockId));
+      addToast('Stock item removed and inventory updated', 'success');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to remove stock');
+      addToast(err instanceof Error ? err.message : 'Failed to remove stock', 'error');
     }
   };
 
@@ -117,7 +168,7 @@ export const EditContainerForm: React.FC<EditContainerFormProps> = ({
     }
   };
 
-  // Get available stocks (not already in container)
+  // Get available stocks (not already in this container)
   const availableStocks = allStocks.filter(
     (stock) => !containerStocks.some((cs) => cs.id === stock.id)
   );
@@ -125,45 +176,110 @@ export const EditContainerForm: React.FC<EditContainerFormProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setError(null);
-
-    if (!formData.origin_location) {
-      setError('Origin location is required. Please select a location on the map.');
-      setLoading(false);
-      return;
-    }
 
     try {
+      // Check user role
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user?.id) {
+        addToast('You must be logged in', 'error');
+        setLoading(false);
+        return;
+      }
+
+      const userRole = await getUserRole(session.user.id);
+
+      const autoStatus = calculateContainerStatus(formData.truck_id || null, containerStocks.length > 0);
+      
+      const updatedData = {
+        container_number: formData.container_number,
+        status: autoStatus,
+        origin_location: container.origin_location,
+        destination_location: null,
+        truck_id: formData.truck_id || null,
+        stockQuantityChanges: Array.from(stockQuantityChanges.entries()),
+        newStocksToAdd: Array.from(newStocksToAdd.entries()),
+      };
+
+      // Manager: Create request instead of direct action
+      if (userRole === 'manager') {
+        const managerId = await getManagerId(session.user.id);
+        if (!managerId) {
+          addToast('Manager account not found', 'error');
+          setLoading(false);
+          return;
+        }
+
+        const created = await createManagerRequest(
+          managerId,
+          'edit_container',
+          'container',
+          updatedData,
+          container.id
+        );
+
+        if (created) {
+          addToast('✅ Edit request submitted for admin approval!', 'success');
+          setStockQuantityChanges(new Map());
+          setNewStocksToAdd(new Map());
+          setIsOpen(false);
+        } else {
+          addToast('Failed to submit request', 'error');
+        }
+        return;
+      }
+
+      // Admin: Update container directly
       const updatedContainer = await updateContainer(container.id, {
         container_number: formData.container_number,
-        status: formData.status,
-        origin_location: formData.origin_location,
+        status: autoStatus,
+        origin_location: container.origin_location,
         destination_location: null,
         truck_id: formData.truck_id || null,
       });
 
-      // Update stock quantities
+      // Update stock quantities and adjust inventory
       for (const [stockId, newQuantity] of stockQuantityChanges.entries()) {
         const stock = containerStocks.find((s) => s.id === stockId);
         if (stock) {
+          const oldQuantity = stock.quantity;
+          const difference = newQuantity - oldQuantity;
+
+          // Update the stock quantity
           await updateStock(stockId, {
             quantity: newQuantity,
           });
+
+          // Adjust central inventory based on difference
+          if (difference > 0) {
+            // Quantity increased - deduct more from inventory
+            await deductFromInventory(difference);
+          } else if (difference < 0) {
+            // Quantity decreased - add back to inventory
+            await addBackToInventory(Math.abs(difference));
+          }
         }
       }
 
       // Add new stocks to container
+      // When adding stocks, assign them to the container and deduct from central inventory
+      let totalQuantityAdded = 0;
       for (const [stockId, quantityToAdd] of newStocksToAdd.entries()) {
         const stock = allStocks.find((s) => s.id === stockId);
         if (stock) {
           await updateStock(stockId, {
             container_id: container.id,
-            quantity: stock.quantity - quantityToAdd,
           });
+          totalQuantityAdded += stock.quantity;
         }
       }
 
+      // Deduct total quantity from central inventory
+      if (totalQuantityAdded > 0) {
+        await deductFromInventory(totalQuantityAdded);
+      }
+
       console.log('Container updated:', updatedContainer);
+      addToast('Container updated successfully! ✓', 'success');
       onContainerUpdated(updatedContainer);
       setStockQuantityChanges(new Map());
       setNewStocksToAdd(new Map());
@@ -171,7 +287,9 @@ export const EditContainerForm: React.FC<EditContainerFormProps> = ({
       // Reload container stocks to reflect changes
       loadContainerStocks();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update container');
+      const errorMsg = err instanceof Error ? err.message : 'Failed to update container';
+      console.error('Update error:', err);
+      addToast(errorMsg, 'error');
     } finally {
       setLoading(false);
     }
@@ -179,6 +297,16 @@ export const EditContainerForm: React.FC<EditContainerFormProps> = ({
 
   return (
     <>
+      {/* Toasts */}
+      {toasts.map((toast) => (
+        <Toast
+          key={toast.id}
+          message={toast.message}
+          type={toast.type}
+          onClose={() => removeToast(toast.id)}
+        />
+      ))}
+
       <button
         onClick={() => setIsOpen(true)}
         className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition"
@@ -209,11 +337,6 @@ export const EditContainerForm: React.FC<EditContainerFormProps> = ({
               </div>
 
               <form onSubmit={handleSubmit} className="p-6 space-y-6">
-              {error && (
-                <div className="bg-red-100 text-red-700 p-3 rounded text-sm">
-                  {error}
-                </div>
-              )}
 
               {/* Container Details */}
               <div className="space-y-4">
@@ -231,38 +354,9 @@ export const EditContainerForm: React.FC<EditContainerFormProps> = ({
                     required
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-black"
                   />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-black mb-1">
-                    Status
-                  </label>
-                  <select
-                    name="status"
-                    value={formData.status}
-                    onChange={handleChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-black"
-                  >
-                    <option value="Available">Available</option>
-                    <option value="In Transit">In Transit</option>
-                    <option value="Stored">Stored</option>
-                  </select>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-sm font-medium text-black mb-1">
-                      Origin Location *
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => setIsOriginMapOpen(true)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-black hover:bg-gray-50 flex items-center justify-center gap-2 transition font-medium"
-                    >
-                      <MapPin size={18} />
-                      {formData.origin_location ? formData.origin_location : 'Click Map to Select Location'}
-                    </button>
-                  </div>
+                  <p className="text-xs text-gray-600 mt-1">
+                    Status will be automatically calculated based on truck assignment and stock contents.
+                  </p>
                 </div>
               </div>
 
@@ -270,33 +364,88 @@ export const EditContainerForm: React.FC<EditContainerFormProps> = ({
               <div className="space-y-4">
                 <h3 className="font-semibold text-black text-lg flex items-center gap-2">
                   <TruckIcon size={20} />
-                  Assign Truck
+                  Truck Assignment
                 </h3>
 
-                <div>
-                  <label className="block text-sm font-medium text-black mb-1">
-                    Select Truck (Optional)
-                  </label>
-                  <select
-                    name="truck_id"
-                    value={formData.truck_id}
-                    onChange={handleChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-black"
-                  >
-                    <option value="">-- No Truck Assigned --</option>
-                    {trucks.map((truck) => (
-                      <option key={truck.id} value={truck.id}>
-                        {truck.name} - {truck.driver_name || 'N/A'} ({truck.status})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {formData.truck_id && (
+                {!isEditingTruck && formData.truck_id ? (
+                  // Show current assignment
                   <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                    <p className="text-sm text-blue-800">
-                      ✓ Container will be assigned to the selected truck
+                    <p className="text-sm font-medium text-black mb-2">
+                      Currently Assigned To:
                     </p>
+                    <p className="text-black font-semibold mb-3">
+                      {trucks.find((t) => t.id === formData.truck_id)?.name || 'Unknown Truck'}
+                    </p>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingTruck(true)}
+                        className="flex-1 px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition"
+                      >
+                        Change Truck
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFormData((prev) => ({ ...prev, truck_id: '' }));
+                          setIsEditingTruck(false);
+                        }}
+                        className="flex-1 px-3 py-2 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700 transition"
+                      >
+                        Remove Assignment
+                      </button>
+                    </div>
+                  </div>
+                ) : !isEditingTruck ? (
+                  // Show option to assign
+                  <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                    <p className="text-sm text-gray-600 mb-3">No truck assigned to this container</p>
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingTruck(true)}
+                      className="w-full px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition"
+                    >
+                      Assign a Truck
+                    </button>
+                  </div>
+                ) : (
+                  // Show selection mode
+                  <div className="space-y-3">
+                    <select
+                      name="truck_id"
+                      value={formData.truck_id}
+                      onChange={handleChange}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-black"
+                    >
+                      <option value="">-- No Truck --</option>
+                      {trucks.map((truck) => (
+                        <option key={truck.id} value={truck.id}>
+                          {truck.name} - {truck.driver_name || 'N/A'} ({truck.status})
+                        </option>
+                      ))}
+                    </select>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!formData.truck_id) {
+                            setIsEditingTruck(false);
+                          } else {
+                            setIsEditingTruck(false);
+                          }
+                        }}
+                        className="flex-1 px-3 py-2 bg-gray-300 text-black text-sm rounded-lg hover:bg-gray-400 transition"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingTruck(false)}
+                        className="flex-1 px-3 py-2 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition"
+                      >
+                        Confirm
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -414,13 +563,6 @@ export const EditContainerForm: React.FC<EditContainerFormProps> = ({
             </form>
             </div>
           </div>
-
-          <OriginLocationMapModal
-            isOpen={isOriginMapOpen}
-            onClose={() => setIsOriginMapOpen(false)}
-            onSelectLocation={(city) => setFormData(prev => ({...prev, origin_location: city}))}
-            currentLocation={formData.origin_location}
-          />
         </>
       )}
     </>

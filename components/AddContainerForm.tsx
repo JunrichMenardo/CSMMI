@@ -1,10 +1,12 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, X, ShoppingCart, MapPin } from 'lucide-react';
+import { Plus, X, ShoppingCart } from 'lucide-react';
 import { createContainer, fetchStocks, updateStock, fetchTrucks } from '@/lib/api';
+import { supabase } from '@/lib/supabase';
+import { getUserRole, createManagerRequest, getManagerId } from '@/lib/managerUtils';
+import { deductFromInventory } from '@/lib/inventory';
 import { Container, Stock, Truck } from '@/types';
-import { OriginLocationMapModal } from './OriginLocationMapModal';
 
 interface AddContainerFormProps {
   onContainerAdded: (container: Container) => void;
@@ -12,16 +14,15 @@ interface AddContainerFormProps {
 
 export const AddContainerForm: React.FC<AddContainerFormProps> = ({ onContainerAdded }) => {
   const [isOpen, setIsOpen] = useState(false);
-  const [isOriginMapOpen, setIsOriginMapOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stocks, setStocks] = useState<Stock[]>([]);
   const [trucks, setTrucks] = useState<Truck[]>([]);
   const [selectedStocks, setSelectedStocks] = useState<Map<string, number>>(new Map());
+  const [stockDistributionMode, setStockDistributionMode] = useState<'all' | 'custom'>('all');
+  const [customContainerCount, setCustomContainerCount] = useState(1);
   const [formData, setFormData] = useState({
-    container_number: '',
-    status: 'Available' as const,
-    origin_location: '',
+    quantity: 1,
     truck_id: '',
   });
 
@@ -54,8 +55,28 @@ export const AddContainerForm: React.FC<AddContainerFormProps> = ({ onContainerA
     const { name, value } = e.target;
     setFormData((prev) => ({
       ...prev,
-      [name]: value,
+      [name]: name === 'quantity' ? Math.max(1, parseInt(value) || 1) : value,
     }));
+  };
+
+  const generateContainerPrefix = (): string => {
+    const timestamp = Date.now().toString().slice(-6);
+    return `CNT-${timestamp}`;
+  };
+
+  const calculateContainerStatus = (truckId: string | null, hasStocks: boolean): Container['status'] => {
+    const hasAssignedTruck = !!truckId;
+
+    // If has truck assigned
+    if (hasAssignedTruck) {
+      return 'In Transit';
+    }
+    // If has stocks but no truck
+    if (hasStocks) {
+      return 'Stored';
+    }
+    // Empty container, no truck
+    return 'Available';
   };
 
   const handleStockQuantityChange = (stockId: string, quantity: number) => {
@@ -75,47 +96,129 @@ export const AddContainerForm: React.FC<AddContainerFormProps> = ({ onContainerA
     setLoading(true);
     setError(null);
 
-    if (!formData.origin_location) {
-      setError('Origin location is required. Please select a location on the map.');
+    // Determine how many containers will receive stocks
+    const containersToReceiveStocks = stockDistributionMode === 'all' 
+      ? formData.quantity 
+      : Math.min(customContainerCount, formData.quantity);
+
+    if (stockDistributionMode === 'custom' && customContainerCount > formData.quantity) {
+      setError(`Cannot store in ${customContainerCount} containers when only creating ${formData.quantity} containers`);
       setLoading(false);
       return;
     }
 
     try {
-      // Create container
-      const container = await createContainer({
-        container_number: formData.container_number,
-        status: formData.status,
-        origin_location: formData.origin_location,
-        destination_location: null,
-        truck_id: formData.truck_id || null,
-      });
+      // Check user role
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user?.id) {
+        setError('You must be logged in');
+        setLoading(false);
+        return;
+      }
 
-      // Add stocks to container and reduce stock quantities
-      for (const [stockId, quantity] of selectedStocks.entries()) {
-        const stock = stocks.find((s) => s.id === stockId);
-        if (stock) {
-          // Update stock to add container_id and reduce quantity
-          await updateStock(stockId, {
-            container_id: container.id,
-            quantity: stock.quantity - quantity,
+      const userRole = await getUserRole(session.user.id);
+
+      const hasStocks = selectedStocks.size > 0;
+      const autoStatus = calculateContainerStatus(formData.truck_id || null, hasStocks);
+
+      const containerData = {
+        quantity: formData.quantity,
+        truck_id: formData.truck_id || null,
+        status: autoStatus,
+        selectedStocks: Array.from(selectedStocks.entries()).map(([id, qty]) => ({
+          stock_id: id,
+          quantity: qty,
+        })),
+        stockDistributionMode,
+        customContainerCount,
+      };
+
+      // Manager: Create request instead of direct action
+      if (userRole === 'manager') {
+        const managerId = await getManagerId(session.user.id);
+        if (!managerId) {
+          setError('Manager account not found');
+          setLoading(false);
+          return;
+        }
+
+        const created = await createManagerRequest(
+          managerId,
+          'add_container',
+          'container',
+          containerData
+        );
+
+        if (created) {
+          setError(null);
+          setFormData({
+            quantity: 1,
+            truck_id: '',
           });
+          setSelectedStocks(new Map());
+          setStockDistributionMode('all');
+          setCustomContainerCount(1);
+          setIsOpen(false);
+          alert('✅ Request submitted for admin approval!\n\nYour containers will be created after the admin reviews and approves your request.');
+          onContainerAdded({} as Container);
+        } else {
+          setError('Failed to submit request');
+        }
+        return;
+      }
+
+      // Admin: Create containers directly
+      const containersCreated: Container[] = [];
+
+      // Create multiple containers based on quantity
+      for (let i = 0; i < formData.quantity; i++) {
+        const containerNumber = generateContainerPrefix();
+        
+        const container = await createContainer({
+          container_number: containerNumber,
+          status: autoStatus,
+          origin_location: null,
+          destination_location: null,
+          truck_id: formData.truck_id || null,
+        });
+        
+        containersCreated.push(container);
+
+        // Add stocks to the container and deduct from central inventory
+        if (i < containersToReceiveStocks) {
+          let totalQuantityAdded = 0;
+          for (const [stockId, quantityToAdd] of selectedStocks.entries()) {
+            const stock = stocks.find((s) => s.id === stockId);
+            if (stock) {
+              // Simply assign the stock to this container
+              await updateStock(stockId, {
+                container_id: container.id,
+              });
+              totalQuantityAdded += stock.quantity;
+            }
+          }
+          // Deduct total quantity from central inventory
+          if (totalQuantityAdded > 0) {
+            await deductFromInventory(totalQuantityAdded);
+          }
         }
       }
 
-      onContainerAdded(container);
+      if (containersCreated.length > 0) {
+        onContainerAdded(containersCreated[0]);
+      }
       
       // Reset form
       setFormData({
-        container_number: '',
-        status: 'Available',
-        origin_location: '',
+        quantity: 1,
         truck_id: '',
       });
       setSelectedStocks(new Map());
+      setStockDistributionMode('all');
+      setCustomContainerCount(1);
       setIsOpen(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add container');
+      setError(err instanceof Error ? err.message : 'Failed to add containers');
     } finally {
       setLoading(false);
     }
@@ -165,67 +268,42 @@ export const AddContainerForm: React.FC<AddContainerFormProps> = ({ onContainerA
                 
                 <div>
                   <label className="block text-sm font-medium text-black mb-1">
-                    Container Number
+                    Number of Containers to Create
                   </label>
                   <input
-                    type="text"
-                    name="container_number"
-                    value={formData.container_number}
+                    type="number"
+                    name="quantity"
+                    value={formData.quantity}
                     onChange={handleChange}
-                    placeholder="e.g., CNT-001"
-                    required
+                    min="1"
+                    placeholder="How many containers"
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-black placeholder-gray-400"
                   />
+                  <p className="text-xs text-gray-600 mt-1">
+                    Container numbers will be auto-generated (e.g., CNT-XXXXX)
+                  </p>
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-black mb-1">
-                    Status
+                    Assign to Truck (Optional)
                   </label>
                   <select
-                    name="status"
-                    value={formData.status}
+                    name="truck_id"
+                    value={formData.truck_id}
                     onChange={handleChange}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-black"
                   >
-                    <option value="Available">Available</option>
-                    <option value="In Transit">In Transit</option>
-                    <option value="Stored">Stored</option>
+                    <option value="">No truck (will be Available/Stored)</option>
+                    {trucks.map((truck) => (
+                      <option key={truck.id} value={truck.id}>
+                        {truck.name} - (Status: {truck.status})
+                      </option>
+                    ))}
                   </select>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-sm font-medium text-black mb-1">
-                      Origin Location *
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => setIsOriginMapOpen(true)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-black hover:bg-gray-50 flex items-center justify-center gap-2 transition font-medium"
-                    >
-                      <MapPin size={18} />
-                      {formData.origin_location ? formData.origin_location : 'Click Map to Select Location'}
-                    </button>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-black mb-1">
-                      Assign to Truck
-                    </label>
-                    <select
-                      name="truck_id"
-                      value={formData.truck_id}
-                      onChange={handleChange}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-black"
-                    >
-                      <option value="">Select truck (optional)</option>
-                      {trucks.map((truck) => (
-                        <option key={truck.id} value={truck.id}>
-                          {truck.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  <p className="text-xs text-gray-600 mt-1">
+                    Status will be automatically set based on truck assignment and contents
+                  </p>
                 </div>
               </div>
 
@@ -235,6 +313,49 @@ export const AddContainerForm: React.FC<AddContainerFormProps> = ({ onContainerA
                   <ShoppingCart size={20} />
                   Add Stock Items
                 </h3>
+
+                {/* Stock Distribution Mode */}
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
+                  <p className="text-sm font-medium text-blue-900">How to distribute stocks:</p>
+                  
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="distribution"
+                        value="all"
+                        checked={stockDistributionMode === 'all'}
+                        onChange={(e) => setStockDistributionMode('all')}
+                        className="w-4 h-4"
+                      />
+                      <span className="text-sm text-black">
+                        Store in ALL {formData.quantity} containers
+                      </span>
+                    </label>
+                    
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="distribution"
+                        value="custom"
+                        checked={stockDistributionMode === 'custom'}
+                        onChange={(e) => setStockDistributionMode('custom')}
+                        className="w-4 h-4"
+                      />
+                      <span className="text-sm text-black">Store in</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max={formData.quantity}
+                        value={customContainerCount}
+                        onChange={(e) => setCustomContainerCount(Math.max(1, parseInt(e.target.value) || 1))}
+                        disabled={stockDistributionMode !== 'custom'}
+                        className="w-16 px-2 py-1 border border-gray-300 rounded text-sm bg-white text-black disabled:bg-gray-100"
+                      />
+                      <span className="text-sm text-black">containers</span>
+                    </label>
+                  </div>
+                </div>
 
                 <div className="bg-gray-50 rounded-lg p-4 space-y-3 max-h-96 overflow-y-auto">
                   {stocks.length === 0 ? (
@@ -282,22 +403,15 @@ export const AddContainerForm: React.FC<AddContainerFormProps> = ({ onContainerA
                 </button>
                 <button
                   type="submit"
-                  disabled={loading || formData.container_number === ''}
+                  disabled={loading || formData.quantity < 1}
                   className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 transition"
                 >
-                  {loading ? 'Creating...' : 'Create Container'}
+                  {loading ? 'Creating...' : `Create ${formData.quantity} Container${formData.quantity !== 1 ? 's' : ''}`}
                 </button>
               </div>
             </form>
             </div>
           </div>
-
-          <OriginLocationMapModal
-            isOpen={isOriginMapOpen}
-            onClose={() => setIsOriginMapOpen(false)}
-            onSelectLocation={(city) => setFormData(prev => ({...prev, origin_location: city}))}
-            currentLocation={formData.origin_location}
-          />
         </>
       )}
     </>

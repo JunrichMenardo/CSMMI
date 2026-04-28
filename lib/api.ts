@@ -181,6 +181,18 @@ export const deleteContainer = async (id: string) => {
   if (error) throw error;
 };
 
+export const markContainerAsDelivered = async (containerId: string) => {
+  const { data, error } = await supabase
+    .from('containers')
+    .update({ status: 'Delivered', updated_at: new Date().toISOString() })
+    .eq('id', containerId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+};
+
 // Stock operations
 export const fetchStocks = async (): Promise<Stock[]> => {
   const { data, error } = await supabase

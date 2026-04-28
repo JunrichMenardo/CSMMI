@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { MapPin } from 'lucide-react';
+import { useLocationMarkers } from '@/hooks/useLocationMarkers';
 
 interface DestinationMapModalProps {
   isOpen: boolean;
@@ -10,6 +11,7 @@ interface DestinationMapModalProps {
   currentDestination?: string;
   truckLat?: number;
   truckLng?: number;
+  customMarkers?: Array<{ id: string; lat: number; lng: number; name: string; type: 'port' | 'store' | 'plant' }>;
 }
 
 export const DestinationMapModal: React.FC<DestinationMapModalProps> = ({
@@ -19,9 +21,14 @@ export const DestinationMapModal: React.FC<DestinationMapModalProps> = ({
   currentDestination,
   truckLat,
   truckLng,
+  customMarkers = [],
 }) => {
   const [selectedCity, setSelectedCity] = useState<string | null>(currentDestination || null);
   const [isMounted, setIsMounted] = useState(false);
+  const { markers: sharedMarkers } = useLocationMarkers();
+  
+  // Merge custom markers with shared markers
+  const allMarkers = [...sharedMarkers, ...customMarkers];
 
   useEffect(() => {
     setIsMounted(true);
@@ -44,13 +51,66 @@ export const DestinationMapModal: React.FC<DestinationMapModalProps> = ({
 
   return (
     <>
+      <style>{`
+        @media (max-width: 768px) {
+          .dest-modal-container {
+            width: 100vw !important;
+            height: 100vh !important;
+            border-radius: 0 !important;
+            max-width: 100% !important;
+          }
+          .dest-modal-header {
+            padding: 1rem !important;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.5rem !important;
+          }
+          .dest-modal-header h2 {
+            font-size: 1rem !important;
+          }
+          .dest-modal-header button {
+            position: absolute;
+            right: 1rem;
+            top: 1rem;
+          }
+          .dest-modal-quickselect {
+            max-height: 100px !important;
+            padding: 0.75rem !important;
+          }
+          .dest-modal-quickselect p {
+            font-size: 0.75rem !important;
+            margin-bottom: 0.5rem !important;
+          }
+          .dest-modal-button {
+            padding: 0.5rem 0.5rem !important;
+            font-size: 0.75rem !important;
+            min-height: 44px;
+            min-width: 44px;
+          }
+          .dest-modal-footer {
+            padding: 1rem !important;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 1rem !important;
+          }
+          .dest-modal-footer button {
+            padding: 0.75rem 1rem !important;
+            font-size: 0.875rem !important;
+            min-height: 44px;
+            width: 100%;
+          }
+          .dest-modal-footer > div:first-child p {
+            font-size: 0.75rem !important;
+          }
+        }
+      `}</style>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 40 }} />
       
       <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
-        <div onClick={(e) => e.stopPropagation()} style={{ background: 'white', borderRadius: '0.75rem', boxShadow: '0 20px 25px rgba(0,0,0,0.1)', width: '95vw', height: '90vh', display: 'flex', flexDirection: 'column' }}>
+        <div onClick={(e) => e.stopPropagation()} className="dest-modal-container" style={{ background: 'white', borderRadius: '0.75rem', boxShadow: '0 20px 25px rgba(0,0,0,0.1)', width: '95vw', height: '90vh', maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           
           {/* Header */}
-          <div style={{ padding: '1.5rem', borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+          <div className="dest-modal-header" style={{ padding: '1.5rem', borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, position: 'relative' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <MapPin style={{ color: '#2563eb' }} size={24} />
               <h2 style={{ fontSize: '1.25rem', fontWeight: 'bold', color: '#000' }}>Select Destination</h2>
@@ -58,8 +118,8 @@ export const DestinationMapModal: React.FC<DestinationMapModalProps> = ({
             <button onClick={onClose} style={{ color: '#9ca3af', background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer' }}>✕</button>
           </div>
 
-          {/* Map Container */}
-          <div style={{ flex: 1, position: 'relative', overflow: 'hidden', width: '100%' }}>
+          {/* Map Container - takes all remaining space */}
+          <div style={{ flex: 1, position: 'relative', overflow: 'hidden', width: '100%', minHeight: 0 }}>
             {isMounted && (
               <>
                 <MapComponent 
@@ -79,8 +139,43 @@ export const DestinationMapModal: React.FC<DestinationMapModalProps> = ({
             )}
           </div>
 
+          {/* Custom Markers Section */}
+          {allMarkers.length > 0 && (
+            <div className="dest-modal-quickselect" style={{ padding: '0.75rem', borderTop: '1px solid #e5e7eb', background: '#f0f9ff', flexShrink: 0, overflow: 'auto', maxHeight: '100px' }}>
+              <p style={{ fontSize: '0.875rem', fontWeight: '600', color: '#000', margin: '0 0 0.75rem 0' }}>Quick Select Locations:</p>
+              <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                {allMarkers.map((marker) => {
+                  const typeEmojis = { port: '⚓', store: '🏪', plant: '🏭' };
+                  const markerString = `${marker.name}|${marker.lat}|${marker.lng}`;
+                  const isSelected = selectedCity === markerString;
+                  return (
+                    <button
+                      key={marker.id}
+                      className="dest-modal-button"
+                      onClick={() => setSelectedCity(markerString)}
+                      style={{
+                        padding: '0.5rem 0.75rem',
+                        border: isSelected ? '2px solid #2563eb' : '1px solid #d1d5db',
+                        background: isSelected ? '#dbeafe' : 'white',
+                        color: '#000',
+                        borderRadius: '0.375rem',
+                        cursor: 'pointer',
+                        fontSize: '0.875rem',
+                        fontWeight: isSelected ? '600' : '500',
+                        whiteSpace: 'nowrap',
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      {typeEmojis[marker.type]} {marker.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Footer */}
-          <div style={{ padding: '1.5rem', borderTop: '1px solid #e5e7eb', background: '#f9fafb', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+          <div className="dest-modal-footer" style={{ padding: '1.5rem', borderTop: '1px solid #e5e7eb', background: '#f9fafb', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
             <div>
               {selectedCity && <p style={{ fontSize: '0.875rem', fontWeight: '600', color: '#000', margin: 0 }}>Selected: <span style={{ color: '#2563eb' }}>{selectedCity.includes('|') ? selectedCity.split('|')[0] : selectedCity}</span></p>}
             </div>
@@ -115,6 +210,9 @@ function MapComponent(props: { truckLat?: number; truckLng?: number; onLocationC
 // Lazy map content
 function LazyMapContent(props: any) {
   const { truckLat, truckLng, onLocationClick, selectedLocation, setSelectedLocation, routePath, setRoutePath } = props;
+  const { markers: sharedMarkers } = useLocationMarkers();
+  
+  console.log('📍 LazyMapContent - Shared markers:', sharedMarkers);
   
   const handleMapClick = async (city: string, lat: number, lng: number) => {
     onLocationClick({ city, lat, lng });
@@ -161,6 +259,38 @@ function LazyMapContent(props: any) {
         shadowSize: [41, 41],
       });
 
+      const getMarkerIcon = (type: 'port' | 'store' | 'plant') => {
+        let color: string;
+        let emoji: string;
+        
+        switch (type) {
+          case 'port':
+            color = '#ef4444';
+            emoji = '⚓';
+            break;
+          case 'store':
+            color = '#f59e0b';
+            emoji = '🏪';
+            break;
+          case 'plant':
+            color = '#8b5cf6';
+            emoji = '🏭';
+            break;
+        }
+
+        return new L.DivIcon({
+          html: `
+            <div style="background: ${color}; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; border: 3px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.3);">
+              ${emoji}
+            </div>
+          `,
+          iconSize: [40, 40],
+          iconAnchor: [20, 40],
+          popupAnchor: [0, -40],
+          className: 'marker-icon'
+        });
+      };
+
       const MapClickLayer = ({ onLocationClick }: any) => {
         useMapEvents({
           click(e: any) {
@@ -184,6 +314,14 @@ function LazyMapContent(props: any) {
             >
               <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='&copy; OpenStreetMap contributors' />
               <MapClickLayer onLocationClick={handleMapClick} />
+              
+              {/* Display shared markers */}
+              {sharedMarkers && sharedMarkers.map(marker => (
+                <Marker key={marker.id} position={[marker.lat, marker.lng]} icon={getMarkerIcon(marker.type)}>
+                  {/* Popup will auto-open on click */}
+                </Marker>
+              ))}
+              
               {truckLat !== undefined && truckLng !== undefined && (
                 <Marker position={[truckLat, truckLng]} icon={getTruckIcon()} />
               )}
