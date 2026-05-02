@@ -34,6 +34,10 @@ body.sidebar-collapsed .dashboard-sidebar {
   transform: translateX(-100%) !important;
 }
 
+body.sidebar-collapsed header {
+  margin-left: 0 !important;
+}
+
 /* Truck Icon Styling */
 .truck-icon {
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2));

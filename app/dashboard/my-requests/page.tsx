@@ -18,6 +18,7 @@ interface ManagerRequest {
   rejection_reason: string | null;
   created_at: string;
   reviewed_at: string | null;
+  reviewed_by?: string | null;
 }
 
 export default function MyRequestsPage() {
@@ -282,8 +283,11 @@ export default function MyRequestsPage() {
 
                   {request.status === 'approved' && request.reviewed_at && (
                     <div className="bg-green-100/50 border border-green-300 rounded-lg p-3 mt-3">
-                      <p className="text-xs text-green-800">
-                        ✓ Approved on {new Date(request.reviewed_at).toLocaleString()}
+                      <p className="text-xs text-green-800 font-semibold">
+                        ✓ Approved and applied on {new Date(request.reviewed_at).toLocaleString()}
+                      </p>
+                      <p className="text-xs text-green-700 mt-1">
+                        The admin approval has already been executed in the system.
                       </p>
                     </div>
                   )}

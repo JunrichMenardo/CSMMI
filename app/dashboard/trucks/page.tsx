@@ -178,6 +178,12 @@ export default function TruckManagementPage() {
 
       const userRole = await getUserRole(session.user.id);
 
+      const truck = trucks.find((t) => t.id === truckId);
+      if (!truck) {
+        alert('Truck not found');
+        return;
+      }
+
       // Manager: Create delete request
       if (userRole === 'manager') {
         const managerId = await getManagerId(session.user.id);
@@ -190,21 +196,39 @@ export default function TruckManagementPage() {
           managerId,
           'delete_truck',
           'truck',
-          { id: truckId },
+          truck,
           truckId
         );
 
         if (created) {
-          alert('✅ Delete request submitted for admin approval!\n\nThe truck will be deleted after the admin reviews and approves your request.');
+          alert('✅ Delete request submitted for admin approval!\n\nThe truck will be moved to trash after the admin reviews and approves your request.');
         } else {
           alert('Failed to submit delete request');
         }
         return;
       }
 
-      // Admin: Delete truck directly
+      // Admin: Move truck to trash
+      // Insert into trash table
+      const { error: trashError } = await supabase.from('trash').insert([
+        {
+          entity_id: truckId,
+          entity_type: 'truck',
+          entity_data: truck,
+          deleted_by: session.user.id,
+        },
+      ]);
+
+      if (trashError) {
+        console.error('Failed to move to trash:', trashError);
+        alert('Failed to delete truck — could not move to trash');
+        return;
+      }
+
+      // Delete truck from original table
       await deleteTruck(truckId);
       setTrucks((prev) => prev.filter((t) => t.id !== truckId));
+      alert('✅ Truck moved to trash');
     } catch (error) {
       console.error('Failed to delete truck:', error);
       alert('Failed to delete truck');

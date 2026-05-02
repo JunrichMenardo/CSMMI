@@ -115,6 +115,12 @@ export default function StockManagementPage() {
 
       const userRole = await getUserRole(session.user.id);
 
+      const stock = stocks.find((s) => s.id === stockId);
+      if (!stock) {
+        alert('Stock not found');
+        return;
+      }
+
       // Manager: Create delete request
       if (userRole === 'manager') {
         const managerId = await getManagerId(session.user.id);
@@ -127,22 +133,40 @@ export default function StockManagementPage() {
           managerId,
           'delete_stock',
           'stock',
-          { id: stockId },
+          stock,
           stockId
         );
 
         if (created) {
-          alert('✅ Delete request submitted for admin approval!\n\nThe stock will be deleted after the admin reviews and approves your request.');
+          alert('✅ Delete request submitted for admin approval!\n\nThe stock will be moved to trash after the admin reviews and approves your request.');
         } else {
           alert('Failed to submit delete request');
         }
         return;
       }
 
-      // Admin: Delete stock directly
+      // Admin: Move stock to trash
+      // Insert into trash table
+      const { error: trashError } = await supabase.from('trash').insert([
+        {
+          entity_id: stockId,
+          entity_type: 'stock',
+          entity_data: stock,
+          deleted_by: session.user.id,
+        },
+      ]);
+
+      if (trashError) {
+        console.error('Failed to move to trash:', trashError);
+        alert('Failed to delete stock — could not move to trash');
+        return;
+      }
+
+      // Delete stock from original table
       await deleteStock(stockId);
       setStocks((prev) => prev.filter((s) => s.id !== stockId));
       setSelectedStockId(null);
+      alert('✅ Stock moved to trash');
     } catch (error) {
       console.error('Failed to delete stock:', error);
       alert('Failed to delete stock');

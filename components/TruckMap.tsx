@@ -62,20 +62,31 @@ const fetchRoadRoute = async (
   endLng: number
 ): Promise<[number, number][]> => {
   try {
-    const response = await fetch(
-      `https://router.project-osrm.org/route/v1/driving/${startLng},${startLat};${endLng},${endLat}?overview=full&geometries=geojson`
-    );
-    const data = await response.json();
-    
-    if (data.routes && data.routes.length > 0) {
-      const coordinates = data.routes[0].geometry.coordinates;
-      // Convert [lng, lat] to [lat, lng] format for Leaflet
-      return coordinates.map(([lng, lat]: [number, number]) => [lat, lng]);
+    // Try calling public OSRM directly from the client (Leaflet-style client routing)
+    const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${startLng},${startLat};${endLng},${endLat}?overview=full&geometries=geojson`;
+    const resp = await fetch(osrmUrl, { cache: 'no-store', headers: { Accept: 'application/json' } });
+    if (resp.ok) {
+      const payload = await resp.json();
+      const osrmCoords = payload?.routes?.[0]?.geometry?.coordinates as [number, number][] | undefined;
+      if (Array.isArray(osrmCoords) && osrmCoords.length > 1) {
+        // convert [lng,lat] -> [lat,lng]
+        return osrmCoords.map(([lng, lat]) => [lat, lng] as [number, number]);
+      }
     }
-  } catch (error) {
-    console.error('Failed to fetch road route:', error);
+  } catch (err) {
+    // ignore and fall through to client fallback
   }
-  return [];
+
+  // Final client-side fallback: interpolate a visible straight line
+  const steps = 20;
+  const out: [number, number][] = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const lat = startLat + (endLat - startLat) * t;
+    const lng = startLng + (endLng - startLng) * t;
+    out.push([lat, lng]);
+  }
+  return out;
 };
 
 const getTruckIcon = (rotation: number = 0) => {
@@ -217,7 +228,6 @@ const TruckMarkers: React.FC<{
     <>
 
       {trucks.map((truck) => {
-        console.log(`🚚 TRUCK "${truck.name}" RENDERING AT:`, [truck.latitude, truck.longitude]);
         return (
         <div key={truck.id}>
           {truck.latitude && truck.longitude && (
@@ -264,28 +274,16 @@ const TruckMarkers: React.FC<{
               {selectedTruckId === truck.id && destinations[truck.id] && (
                 <>
                   {/* Road trace polyline */}
-                  {roadRoutes[truck.id] && roadRoutes[truck.id].length > 0 ? (
+                  {roadRoutes[truck.id] && roadRoutes[truck.id].length > 1 && (
                     <Polyline
                       positions={roadRoutes[truck.id]}
-                      color="#ef4444"
+                      color={roadRoutes[truck.id].length > 2 ? '#ef4444' : '#f97316'}
                       weight={3}
-                      opacity={0.7}
-                      dashArray="5, 5"
-                    />
-                  ) : (
-                    // Fallback to straight line if no road route
-                    <Polyline
-                      positions={[
-                        [truck.latitude, truck.longitude] as [number, number],
-                        [destinations[truck.id]!.lat, destinations[truck.id]!.lng] as [number, number],
-                      ]}
-                      color="#ef4444"
-                      weight={2}
-                      opacity={0.6}
+                      opacity={0.75}
                       dashArray="5, 5"
                     />
                   )}
-                  
+
                   {/* Destination marker */}
                   <Marker
                     position={[destinations[truck.id]!.lat, destinations[truck.id]!.lng]}
@@ -368,6 +366,9 @@ const TruckMapComponent: React.FC<MapProps> = ({
   const [showSearchResults, setShowSearchResults] = useState(false);
   const [searching, setSearching] = useState(false);
   const mapRef = useRef<any>(null);
+  const lastRouteKeyRef = useRef<string>('');
+  const failedRouteUntilRef = useRef<Record<string, number>>({});
+  const lastRouteFetchAtRef = useRef<Record<string, number>>({});
 
   const selectedTruck = trucks.find((t) => t.id === selectedTruckId);
 
@@ -393,12 +394,6 @@ const TruckMapComponent: React.FC<MapProps> = ({
 
       // Get destination from truck's destination_location - ONLY TRUCK DESTINATION
       const truck = trucks.find((t) => t.id === selectedTruckId);
-      console.log('=== TRUCK SELECTION ===');
-      console.log('Truck Name:', truck?.name);
-      console.log('Truck ID:', truck?.id);
-      console.log('Truck Location:', truck?.latitude, truck?.longitude);
-      console.log('Truck Destination Location (from DB):', truck?.destination_location);
-      
       if (truck && truck.destination_location && truck.destination_location.trim() !== '') {
         let destLat: number, destLng: number, destName: string;
         
@@ -408,18 +403,14 @@ const TruckMapComponent: React.FC<MapProps> = ({
           destName = parts[0];
           destLat = parseFloat(parts[1]);
           destLng = parseFloat(parts[2]);
-          console.log('Parsed destination with coordinates:', { destName, destLat, destLng });
         } else {
           // Fallback for old format (just city name)
           const coords = getCityCoordinates(truck.destination_location);
           destName = truck.destination_location;
           destLat = coords.lat;
           destLng = coords.lng;
-          console.log('Using predefined city coordinates for:', destName);
         }
-        
-        console.log('Resolved Destination City:', destName);
-        console.log('Destination Coordinates:', { lat: destLat, lng: destLng });
+
         setDestinations((prev) => ({
           ...prev,
           [selectedTruckId]: {
@@ -431,21 +422,46 @@ const TruckMapComponent: React.FC<MapProps> = ({
 
         // Fetch road route from truck to destination
         if (truck.latitude && truck.longitude) {
-          console.log('Fetching road route from', [truck.latitude, truck.longitude], 'to', [destLat, destLng]);
+          const routeKey = `${selectedTruckId}:${truck.latitude.toFixed(2)},${truck.longitude.toFixed(2)}:${destLat.toFixed(2)},${destLng.toFixed(2)}`;
+          const now = Date.now();
+          const cooldownUntil = failedRouteUntilRef.current[routeKey] ?? 0;
+          const lastFetchedAt = lastRouteFetchAtRef.current[routeKey] ?? 0;
+
+          // Global throttle per route key: avoid hammering provider while trucks poll/update.
+          if (now - lastFetchedAt < 30000) {
+            setLoadingRoutes(false);
+            return;
+          }
+
+          if (cooldownUntil > now) {
+            setLoadingRoutes(false);
+            return;
+          }
+          if (lastRouteKeyRef.current === routeKey) {
+            setLoadingRoutes(false);
+            return;
+          }
+          lastRouteKeyRef.current = routeKey;
+          lastRouteFetchAtRef.current[routeKey] = now;
+
           fetchRoadRoute(truck.latitude, truck.longitude, destLat, destLng)
             .then((roadCoordinates) => {
-              console.log('Road route fetched with', roadCoordinates.length, 'waypoints');
+              if (roadCoordinates.length <= 2) {
+                failedRouteUntilRef.current[routeKey] = Date.now() + 120000;
+              } else {
+                delete failedRouteUntilRef.current[routeKey];
+              }
               setRoadRoutes((prev) => ({ ...prev, [selectedTruckId]: roadCoordinates }));
             })
-            .catch((err) => {
-              console.debug('Failed to fetch road route:', err);
+            .catch(() => {
+              failedRouteUntilRef.current[routeKey] = Date.now() + 120000;
               setRoadRoutes((prev) => ({ ...prev, [selectedTruckId]: [] }));
             });
         }
       } else {
-        console.log('No destination set for this truck - showing no destination marker');
         setDestinations((prev) => ({ ...prev, [selectedTruckId]: null }));
         setRoadRoutes((prev) => ({ ...prev, [selectedTruckId]: [] }));
+        lastRouteKeyRef.current = '';
       }
       
       setLoadingRoutes(false);

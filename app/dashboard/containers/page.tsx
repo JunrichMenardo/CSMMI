@@ -197,6 +197,12 @@ export default function ContainersPage() {
 
       const userRole = await getUserRole(session.user.id);
 
+      const container = containers.find((c) => c.id === containerId);
+      if (!container) {
+        alert('Container not found');
+        return;
+      }
+
       // Manager: Create delete request
       if (userRole === 'manager') {
         const managerId = await getManagerId(session.user.id);
@@ -209,22 +215,40 @@ export default function ContainersPage() {
           managerId,
           'delete_container',
           'container',
-          { id: containerId },
+          container,
           containerId
         );
 
         if (created) {
-          alert('✅ Delete request submitted for admin approval!\n\nThe container will be deleted after the admin reviews and approves your request.');
+          alert('✅ Delete request submitted for admin approval!\n\nThe container will be moved to trash after the admin reviews and approves your request.');
         } else {
           alert('Failed to submit delete request');
         }
         return;
       }
 
-      // Admin: Delete container directly
+      // Admin: Move container to trash
+      // Insert into trash table
+      const { error: trashError } = await supabase.from('trash').insert([
+        {
+          entity_id: containerId,
+          entity_type: 'container',
+          entity_data: container,
+          deleted_by: session.user.id,
+        },
+      ]);
+
+      if (trashError) {
+        console.error('Failed to move to trash:', trashError);
+        alert('Failed to delete container — could not move to trash');
+        return;
+      }
+
+      // Delete container from original table
       await deleteContainer(containerId);
       setContainers((prev) => prev.filter((c) => c.id !== containerId));
       setSelectedContainerId(null);
+      alert('✅ Container moved to trash');
     } catch (error) {
       console.error('Failed to delete container:', error);
       alert('Failed to delete container');

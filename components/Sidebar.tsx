@@ -186,13 +186,17 @@ export const Sidebar: React.FC = () => {
   };
 
   const toggleSidebar = () => {
-    setIsSidebarOpen((prev) => !prev);
+    window.dispatchEvent(new CustomEvent('dashboard:toggle-sidebar'));
+  };
+
+  const closeSidebar = () => {
+    window.dispatchEvent(new CustomEvent('dashboard:close-sidebar'));
   };
 
   return (
     <>
       <div
-        className={`fixed inset-0 bg-black/40 z-40 transition-opacity ${
+        className={`fixed inset-0 top-16 bg-black/40 z-20 transition-opacity ${
           isSidebarOpen ? 'opacity-100 pointer-events-auto md:pointer-events-none' : 'opacity-0 pointer-events-none'
         } md:bg-transparent`}
         onClick={toggleSidebar}
@@ -204,14 +208,16 @@ export const Sidebar: React.FC = () => {
       >
       {/* Sidebar Header */}
       <div className="p-5 md:p-6 border-b border-slate-700 relative">
-        <button
-          type="button"
-          onClick={toggleSidebar}
-          className="absolute right-3 top-3 inline-flex h-10 w-10 items-center justify-center rounded-lg bg-slate-800/70 text-white hover:bg-slate-700 transition"
-          aria-label="Toggle sidebar"
-        >
-          <span className="text-2xl leading-none font-bold" aria-hidden="true">☰</span>
-        </button>
+        {isSidebarOpen && (
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            className="absolute right-3 top-3 inline-flex h-10 w-10 items-center justify-center rounded-lg bg-slate-800/70 text-white hover:bg-slate-700 transition"
+            aria-label="Close navigation menu"
+          >
+            <span className="text-2xl leading-none font-bold" aria-hidden="true">☰</span>
+          </button>
+        )}
         <div className="flex items-center gap-3 mb-3">
           <Image
             src="/ease-logistics-logo.svg"
@@ -247,7 +253,7 @@ export const Sidebar: React.FC = () => {
             <Link
               key={item.href}
               href={item.href}
-              onClick={() => setIsSidebarOpen(false)}
+              onClick={closeSidebar}
               className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 group ${
                 active
                   ? 'bg-blue-600 text-white shadow-md'

@@ -3,6 +3,30 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-key';
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const resilientFetch: typeof fetch = async (input, init) => {
+  const maxRetries = 2;
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    try {
+      return await fetch(input, init);
+    } catch (error) {
+      const isNetworkFailure =
+        error instanceof TypeError ||
+        (error instanceof Error && error.name === 'AbortError');
+
+      if (!isNetworkFailure || attempt === maxRetries) {
+        throw error;
+      }
+
+      // Brief backoff helps with temporary network hiccups.
+      await sleep(300 * (attempt + 1));
+    }
+  }
+
+  throw new Error('Request failed after retries');
+};
+
 if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
   console.warn('Supabase environment variables not set, using placeholder.');
   console.log('URL:', process.env.NEXT_PUBLIC_SUPABASE_URL);
@@ -10,15 +34,49 @@ if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_A
 }
 
 // Create Supabase client with error handling
-let supabase: SupabaseClient;
-try {
-  console.log('Creating Supabase client with URL:', supabaseUrl);
-  supabase = createClient(supabaseUrl, supabaseKey);
-} catch (error) {
-  console.error('Failed to create Supabase client:', error);
-  // Create with placeholder if it fails
-  supabase = createClient('https://placeholder.supabase.co', 'placeholder-key');
+declare global {
+  // eslint-disable-next-line no-var
+  var __csmmiSupabaseClient: SupabaseClient | undefined;
+  interface Window {
+    __csmmiSupabaseClient?: SupabaseClient;
+  }
 }
+
+const createSupabaseClient = () => {
+  try {
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('Creating Supabase client with URL:', supabaseUrl);
+    }
+    return createClient(supabaseUrl, supabaseKey, {
+      global: {
+        fetch: resilientFetch,
+      },
+    });
+  } catch (error) {
+    console.error('Failed to create Supabase client:', error);
+    return createClient('https://placeholder.supabase.co', 'placeholder-key', {
+      global: {
+        fetch: resilientFetch,
+      },
+    });
+  }
+};
+
+const getSingletonClient = () => {
+  if (typeof window !== 'undefined') {
+    if (!window.__csmmiSupabaseClient) {
+      window.__csmmiSupabaseClient = createSupabaseClient();
+    }
+    return window.__csmmiSupabaseClient;
+  }
+
+  if (!globalThis.__csmmiSupabaseClient) {
+    globalThis.__csmmiSupabaseClient = createSupabaseClient();
+  }
+  return globalThis.__csmmiSupabaseClient;
+};
+
+const supabase = getSingletonClient();
 
 export { supabase };
 

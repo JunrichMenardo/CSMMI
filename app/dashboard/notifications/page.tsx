@@ -195,6 +195,9 @@ export default function NotificationsPage() {
 
   const executeApprovedAction = async (request: ManagerRequest): Promise<boolean> => {
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const reviewerId = session?.user?.id ?? null;
+
       switch (request.request_type) {
         case 'add_truck':
           {
@@ -213,6 +216,26 @@ export default function NotificationsPage() {
           break;
         case 'delete_truck':
           {
+            const { data: truckData, error: fetchTruckError } = await supabase
+              .from('trucks')
+              .select('*')
+              .eq('id', request.entity_id)
+              .maybeSingle();
+            if (fetchTruckError) throw fetchTruckError;
+
+            const truckPayload = truckData ?? request.action_data;
+            if (truckPayload) {
+              const { error: trashError } = await supabase.from('trash').insert([
+                {
+                  entity_id: request.entity_id,
+                  entity_type: 'truck',
+                  entity_data: truckPayload,
+                  deleted_by: reviewerId,
+                },
+              ]);
+              if (trashError) throw trashError;
+            }
+
             const { error } = await supabase.from('trucks').delete().eq('id', request.entity_id);
             if (error) throw error;
           }
@@ -234,6 +257,26 @@ export default function NotificationsPage() {
           break;
         case 'delete_container':
           {
+            const { data: containerData, error: fetchContainerError } = await supabase
+              .from('containers')
+              .select('*')
+              .eq('id', request.entity_id)
+              .maybeSingle();
+            if (fetchContainerError) throw fetchContainerError;
+
+            const containerPayload = containerData ?? request.action_data;
+            if (containerPayload) {
+              const { error: trashError } = await supabase.from('trash').insert([
+                {
+                  entity_id: request.entity_id,
+                  entity_type: 'container',
+                  entity_data: containerPayload,
+                  deleted_by: reviewerId,
+                },
+              ]);
+              if (trashError) throw trashError;
+            }
+
             const { error } = await supabase.from('containers').delete().eq('id', request.entity_id);
             if (error) throw error;
           }
@@ -255,6 +298,26 @@ export default function NotificationsPage() {
           break;
         case 'delete_stock':
           {
+            const { data: stockData, error: fetchStockError } = await supabase
+              .from('stocks')
+              .select('*')
+              .eq('id', request.entity_id)
+              .maybeSingle();
+            if (fetchStockError) throw fetchStockError;
+
+            const stockPayload = stockData ?? request.action_data;
+            if (stockPayload) {
+              const { error: trashError } = await supabase.from('trash').insert([
+                {
+                  entity_id: request.entity_id,
+                  entity_type: 'stock',
+                  entity_data: stockPayload,
+                  deleted_by: reviewerId,
+                },
+              ]);
+              if (trashError) throw trashError;
+            }
+
             const { error } = await supabase.from('stocks').delete().eq('id', request.entity_id);
             if (error) throw error;
           }
