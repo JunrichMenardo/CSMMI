@@ -9,9 +9,11 @@ import { Archive, RotateCcw, Trash, Trash2 } from 'lucide-react';
 
 interface ArchivedItem {
   id: string;
+  entity_id: string;
   name: string;
   type: 'truck' | 'container' | 'stock';
   date: string;
+  payload: any;
 }
 
 interface TrashItem {
@@ -65,15 +67,18 @@ export default function ArchiveAndTrashPage() {
 
         if (!archiveError && archiveData) {
           const mapped = archiveData.map((row: any) => ({
-            id: String(row.entity_id || row.id),
+            id: String(row.id),
+            entity_id: String(row.entity_id || row.id),
             name:
-              row.entity_data?.name ||
-              row.entity_data?.item_name ||
-              row.entity_data?.truck_number ||
-              row.entity_data?.container_number ||
+              row.payload?.name ||
+              row.payload?.item_name ||
+              row.payload?.truck_number ||
+              row.payload?.container_number ||
+              row.name ||
               'Unnamed',
-            type: (row.entity_type || row.type || row.entity_data?.entity_type || 'stock') as 'truck' | 'container' | 'stock',
+            type: (row.entity_type || row.type || row.payload?.entity_type || 'stock') as 'truck' | 'container' | 'stock',
             date: row.archived_at || row.created_at || new Date().toISOString(),
+            payload: row.payload || row.entity_data || null,
           }));
           setArchivedItems(mapped);
         }
@@ -153,6 +158,66 @@ export default function ArchiveAndTrashPage() {
     } catch (error) {
       console.error('Failed to permanently delete:', error);
       alert('Failed to permanently delete item');
+    }
+  };
+
+  const handleArchivePermanentDelete = async (archiveRowId: string) => {
+    if (!confirm('Are you sure you want to permanently delete this archived item? This cannot be undone.')) return;
+
+    try {
+      const { error } = await supabase.from('archives').delete().eq('id', archiveRowId);
+      if (error) {
+        alert('Failed to delete archived item');
+        return;
+      }
+      setArchivedItems((prev) => prev.filter((item) => item.id !== archiveRowId));
+      alert('Archived item deleted');
+    } catch (error) {
+      console.error('Failed to delete archived item:', error);
+      alert('Failed to permanently delete archived item');
+    }
+  };
+
+  const handleArchiveRestore = async (item: ArchivedItem) => {
+    if (!confirm('Restore this archived item?')) return;
+
+    try {
+      const payload = item.payload;
+      if (!payload) {
+        alert('No archived payload found to restore');
+        return;
+      }
+
+      if (item.type === 'truck') {
+        const { error } = await supabase.from('trucks').insert([payload]);
+        if (error) {
+          alert('Failed to restore truck');
+          return;
+        }
+      } else if (item.type === 'container') {
+        const { error } = await supabase.from('containers').insert([payload]);
+        if (error) {
+          alert('Failed to restore container');
+          return;
+        }
+      } else {
+        const { error } = await supabase.from('stocks').insert([payload]);
+        if (error) {
+          alert('Failed to restore stock');
+          return;
+        }
+      }
+
+      const { error: deleteArchiveError } = await supabase.from('archives').delete().eq('id', item.id);
+      if (deleteArchiveError) {
+        alert('Item restored, but failed to remove it from archive.');
+      }
+
+      setArchivedItems((prev) => prev.filter((a) => a.id !== item.id));
+      alert('Item restored successfully');
+    } catch (error) {
+      console.error('Failed to restore archived item:', error);
+      alert('Failed to restore archived item');
     }
   };
 
@@ -329,12 +394,13 @@ export default function ArchiveAndTrashPage() {
                       <th className="px-6 py-3 text-left text-sm font-semibold text-black">Item Name</th>
                       <th className="px-6 py-3 text-left text-sm font-semibold text-black">Type</th>
                       <th className="px-6 py-3 text-left text-sm font-semibold text-black">Date</th>
+                      <th className="px-6 py-3 text-right text-sm font-semibold text-black">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
                     {displayedArchive.length === 0 ? (
                       <tr>
-                        <td colSpan={3} className="px-6 py-12">
+                        <td colSpan={4} className="px-6 py-12">
                           <div className="flex flex-col items-center justify-center text-black">
                             <Archive className="mb-4 h-12 w-12 text-gray-400" />
                             <p className="text-center text-black">No archived items for this category</p>
@@ -365,6 +431,24 @@ export default function ArchiveAndTrashPage() {
                           </td>
                           <td className="px-6 py-4 text-sm text-gray-600">
                             {new Date(item.date).toLocaleDateString()} {new Date(item.date).toLocaleTimeString()}
+                          </td>
+                          <td className="px-6 py-4 text-right">
+                            <button
+                              onClick={() => handleArchiveRestore(item)}
+                              className="mr-2 inline-flex items-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white transition hover:bg-green-700"
+                              title="Restore item"
+                            >
+                              <RotateCcw size={16} />
+                              Restore
+                            </button>
+                            <button
+                              onClick={() => handleArchivePermanentDelete(item.id)}
+                              className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-3 py-2 text-sm font-medium text-white transition hover:bg-red-700"
+                              title="Permanently delete"
+                            >
+                              <Trash2 size={16} />
+                              Delete
+                            </button>
                           </td>
                         </tr>
                       ))
